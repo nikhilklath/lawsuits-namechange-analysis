@@ -1,22 +1,27 @@
 clear all 
-import delimited "C:\Users\nikhi\Downloads\Coding Task - Stigler Center\Coding Task - Stigler Center 2021\stata_task.csv"
+
+import delimited "C:\Users\nikhi\Downloads\Coding\stata_task.csv"
+
+***********************************************************************************
+
+// label all variables needed
+
 label var id "Unique ID for each company"
 label var ipo_date "Date when this company went public (IPO)"
 label var sector "Sector/industry that the company is classified in"
 label var province "Province/state where the company is headquartered"
-
 label var soe "State-owned enterprise"
 label define x 1 "government owns a substantial percent of outstanding stocks" 0 "government does not own a substantial percent of outstanding stocks"
 label values soe x
-
 label var ren_date "Date when the company changes its name,  Missing values means the company has not renamed"
-
 label var corebrand "Whether the core brand is kept unchanged after renaming"
+
 encode corebrand, gen(core)
 drop corebrand
 rename core corebrand
 label define y 2 "the core brand is unchanged" 2 "the core brand is changed"
 label values corebrand y
+
 forvalues i = 1990/2017{
 	label var debt_ass`i' "Debt to asset ratio (percentage) in the year `i'"
 	label var total_ass`i' "Total asset in `i'"
@@ -38,20 +43,39 @@ forvalues i = 1/156{
 	label var side`i' "Whether the company is a petitioner or respondent in lawsuit `i'"
 }
 
-gen group1 = !missing(ren_date)
-gen group2 = missing(ren_date)
-gen ren_date1 = date(ren_date, "DM20Y")
+*********************************************************************************************
+
+/*
+Companies that changed their name as group 1 
+and companies that never changed their name as group 2.
+*/
+
+gen group1 = !missing(ren_date) // companies which have a rename date
+gen group2 = missing(ren_date) // companies that do not have a rename date
+gen ren_date1 = date(ren_date, "DM20Y") // convert to date format
 format ren_date1 %td
 
-gen ren_year = year(ren_date1)
+gen ren_year = year(ren_date1) // find the year of renaming
 
 encode id, gen(id_num)
 
-save "C:\Users\nikhi\Downloads\Coding Task - Stigler Center\Coding Task - Stigler Center 2021\stata_task.dta", replace
+* save the data
+save "C:\Users\nikhi\Downloads\Coding\stata_task.dta", replace
 
+****************************************************************************
+
+/*
+Match each company in group 1 with a company in the same province from group 2 with the closest assets in the last year before renaming.
+This is done using one by one nearest matching, without replacements, and differences caused by sequential order of the matching are not considered. 
+The results will give group 3 (the companies matched with group 1) and group 4 (the companies never matched.)
+*/
+
+// keep relevant variables
 qui keep id_num province ren_year total_ass* group*
+
 reshape long total_ass, i(id) j(year)
 qui keep if (year == (ren_year - 1)) | (group2 == 1)
+
 forvalues i = 1991/2017{
     
 	preserve
@@ -149,15 +173,16 @@ forvalues i = 1991/2017{
 	qui drop _all
 	svmat D
 	qui drop if D1==0
-	qui save "C:\Users\nikhi\Downloads\Coding Task - Stigler Center\Coding Task - Stigler Center 2021\match`i'.dta",replace
+	qui save "C:\Users\nikhi\Downloads\Coding\match`i'.dta",replace
 	restore
 }
 
-cd "C:\Users\nikhi\Downloads\Coding Task - Stigler Center\Coding Task - Stigler Center 2021"
+cd "C:\Users\nikhi\Downloads\Coding"
 use match1991.dta, clear
 forvalues i = 1992/2017{
 	append using match`i'
 }
+
 rename D1 id_num
 rename D2 match_id
 rename D3 province
@@ -165,8 +190,10 @@ rename D4 id_num_asset
 rename D5 match_asset
 rename D6 year
 
-merge 1:1 id_num using "C:\Users\nikhi\Downloads\Coding Task - Stigler Center\Coding Task - Stigler Center 2021\stata_task.dta"
+merge 1:1 id_num using "C:\Users\nikhi\Downloads\Coding\stata_task.dta"
 mkmat id_num match_id year if !missing(match_id) , mat(A)
+
+// create the variable group3 and group4
 
 gen group3 = 0
 forvalues i=1/3306{
@@ -181,6 +208,9 @@ forvalues i=1/3306{
 
 gen group4 = group1 == 0 & group3 == 0
 
+******************************************************************
+
+// keep group 1 and group 3 for further analysis
 qui keep if group1==1 | group3==1
 
 gen debt_ass = 0
@@ -190,6 +220,8 @@ gen opr_pro = 0
 
 local len = _N
 
+// generate the debt_ass, total_ass, total_rev, opr_pro in the last year before renaming
+
 forvalues i = 1/`len'{
     local year = year[`i']
 	qui replace debt_ass = debt_ass`year' in `i'
@@ -198,6 +230,9 @@ forvalues i = 1/`len'{
 	qui replace opr_pro = opr_pro`year' in `i'
 }
 
+**************************************************************************************
+
+// Calculate the cumulative number of lawsuits and the monetary amount involved for each company before renaming
 gen cases = 0
 gen amount = 0
 forvalues i = 1/`len'{
@@ -219,6 +254,7 @@ forvalues i = 1/`len'{
 	replace cases = `tot_cases' in `i'
 	replace amount = `tot_amt' in `i'
 }
+************************************************************************
 
 gen log_cases = log(1+cases)
 gen log_amount = log(1+amount)
@@ -230,4 +266,7 @@ gen log_pro = log(1+opr_pro)
 gen case_date1 = date(announce_date1, "DM20Y")
 format case_date1 %td
 gen case_year1 = year(case_date1)
+
+//  possible specification to test if companies are more likely to change their names when facing more lawsuits
 probit group1 log_cases log_amount log_assets log_debt log_rev log_pro i.year i.province if (case_year1 < year | missing(case_year1))
+
